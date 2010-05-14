@@ -13,12 +13,16 @@ def set_options(opt):
 def configure(conf):
   conf.check_tool('compiler_cxx')
   conf.check_tool('node_addon')
+  conf.check_tool('osx')
   conf.check_tool('python')
 
 def build(bld):
   obj = bld.new_task_gen('cxx', 'shlib', 'node_addon', 'py', 'pyembed', 'pyext')
+  obj.env['FRAMEWORK'] = 'python'
   obj.target = 'binding'
   obj.source = "binding.cc"
+  obj.init_py()
+  obj.init_pyembed()
 
 def shutdown():
   # HACK to get binding.node out of build directory.

@@ -2,90 +2,59 @@
 #include <python2.6/Python.h>
 using namespace v8;
 
-// so yeah my algorithms are a little rusty it turns out. 
-// this is largely from memory.
-// )`: don't hate
-int64_t fibonacci(int64_t input) {
-    int64_t two_before = 0;
-    int64_t one_before = 1;
-    int64_t current = 1;
-    if(input < 1) {
-        return 0;
+static Handle<Value>
+Import (const Arguments& args) {
+    HandleScope scope;
+    if (args.Length() == 0 || !args[0]->IsString()) {
+        return ThrowException(
+            Exception::TypeError(String::New("First argument must be a string"))
+        );
     }
-    for(int64_t i = 1; i < input; ++i) {
-        current = one_before + two_before;
-        two_before = one_before;
-        one_before = current;
+    String::Utf8Value utf_module_name(args[0]->ToString());
+    PyObject* py_module_name = PyString_FromString(*utf_module_name),
+    *py_module = PyImport_Import(py_module_name);
+    Py_DECREF(py_module_name);
+    if(py_module != NULL) {
+
+
+        PyObject* py_path = PyObject_Dir(py_module);
+        int sys_path_length = PyList_Size(py_path), 
+        i;
+        char* cstr;
+
+        Local<Array> output = Array::New(sys_path_length);
+        for(i = 0; i < sys_path_length; ++i) {
+            PyObject* item = PyList_GetItem(py_path, i);
+            if(!PyArg_Parse(item, "s", &cstr)) {
+                
+            } else {
+                output->Set(Number::New(i), String::New(cstr));
+            }
+            Py_DECREF(item);
+        }
+
+        Py_XDECREF(py_path);
+        Py_DECREF(py_module);
+        return scope.Close(output);
     }
-    return current;
+    return ThrowException(
+        Exception::TypeError(String::New("Could not import that module."))
+    );
 }
 
 static Handle<Value>
-Fibonacci (const Arguments& args) {
-    HandleScope scope;
-
-    // let's do some error checking.
-    if (args.Length() == 0 || !args[0]->IsNumber()) {
-        return ThrowException(
-            Exception::TypeError(String::New("First argument must be a number"))
-        );
-    }
-
-    // hand it off to our native code.
-    int64_t input(args[0]->IntegerValue());
-    int64_t fib = fibonacci(input);
-
-    // and close the scope over the result. 
-    return scope.Close(Number::New(fib));
+Shutdown (const Arguments& args) {
+    Py_Finalize();
+    return Undefined();
 }
 
 extern "C" void
 init (Handle<Object> target) {
     HandleScope scope;
-
+    Py_Initialize();
     // create a new function template and assign it to the exported variable "fibonacci"
-    Local<FunctionTemplate> t = FunctionTemplate::New(Fibonacci);
-    target->Set(String::New("fibonacci"), t->GetFunction());
+    Local<FunctionTemplate> import = FunctionTemplate::New(Import);
+    Local<FunctionTemplate> shutdown = FunctionTemplate::New(Shutdown);
+    target->Set(String::New("import"), import->GetFunction());
+    target->Set(String::New("shutdown"), shutdown->GetFunction());
 }
-
-/*******
-#   write this out to "wscript" in the same directory.
-#   to build, type
-#       node-waf configure build
-#
-#   then import it in node
-#      var binding = require('<full path to this directory>/binding');
-#      binding.fibonacci(4);
-#
-#   SO EASY
-#
-import Options
-from os import unlink, symlink, popen
-from os.path import exists 
-
-srcdir = '.'
-blddir = 'build'
-VERSION = '0.0.1'
-
-def set_options(opt):
-  opt.tool_options('compiler_cxx')
-
-def configure(conf):
-  conf.check_tool('compiler_cxx')
-  conf.check_tool('node_addon')
-
-def build(bld):
-  obj = bld.new_task_gen('cxx', 'shlib', 'node_addon')
-  obj.target = 'binding'
-  obj.source = "binding.cc"
-
-def shutdown():
-  # HACK to get binding.node out of build directory.
-  # better way to do this?
-  if Options.commands['clean']:
-    if exists('binding.node'): unlink('binding.node')
-  else:
-    if exists('build/default/binding.node') and not exists('binding.node'):
-      symlink('build/default/binding.node', 'binding.node')
-
-******/
