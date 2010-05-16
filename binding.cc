@@ -15,6 +15,7 @@ class PythonObject : public ObjectWrap {
     public:
         PythonObject (PyObject* obj) : _object(obj) { }
         virtual ~PythonObject() {
+            std::cout << "hopefully this is called\n";
             Py_XDECREF(_object);
         };
 
@@ -31,15 +32,38 @@ class PythonObject : public ObjectWrap {
             HandleScope scope;
             Handle<ObjectTemplate> result = ObjectTemplate::New();
             result->SetInternalFieldCount(1);
-            //result->SetNamedPropertyHandler(MapGet, MapSet);
+            result->SetNamedPropertyHandler(MapGet, MapSet);
 
             Handle<FunctionTemplate> to_string = FunctionTemplate::New(ToString);
             Handle<FunctionTemplate> value_of = FunctionTemplate::New(ValueOf);
             Handle<FunctionTemplate> get_attribute = FunctionTemplate::New(GetAttribute);
-            result->Set(String::New("toString"), to_string->GetFunction());
-            result->Set(String::New("valueOf"), value_of->GetFunction());
-            result->Set(String::New("getAttribute"), get_attribute->GetFunction());
+            Handle<FunctionTemplate> call = FunctionTemplate::New(Call);
+            result->SetAccessor(String::NewSymbol("toString"), ToStringAccessor);
+            result->SetAccessor(String::NewSymbol("valueOf"), ValueOfAccessor);
+            result->SetAccessor(String::NewSymbol("CALL_NON_FUNCTION"), CallAccessor);
+            //result->SetAccessor(String::New("getAttribute"), get_attribute->GetFunction());
+            //result->SetAccessor(String::New("CALL_NON_FUNCTION"), call->GetFunction());
             return scope.Close(result);
+        };
+
+        static Handle<Value> ToStringAccessor(Local<String> property, const AccessorInfo& info) {
+            HandleScope scope;
+            Handle<FunctionTemplate> t = FunctionTemplate::New(ToString);
+            return scope.Close(t->GetFunction());
+        };
+
+        static Handle<Value> ToString(const Arguments& args) {
+            HandleScope scope;
+            Handle<Object> obj = args.This();
+            PythonObject* py_obj = ObjectWrap::Unwrap<PythonObject>(obj);
+            std::string result = py_obj->GetStr();
+            return scope.Close(String::New(result.c_str()));
+        };
+        
+        static Handle<Value> ValueOfAccessor(Local<String> property, const AccessorInfo& info) {
+            HandleScope scope;
+            Handle<FunctionTemplate> t = FunctionTemplate::New(ValueOf);
+            return scope.Close(t->GetFunction());
         };
 
         static Handle<Value> ValueOf(const Arguments& args) {
@@ -55,6 +79,12 @@ class PythonObject : public ObjectWrap {
                 return scope.Close(Integer::New(long_result));
             }
             return Undefined();
+        };
+
+        static Handle<Value> CallAccessor(Local<String> property, const AccessorInfo& info) {
+            HandleScope scope;
+            Handle<FunctionTemplate> t = FunctionTemplate::New(Call);
+            return scope.Close(t->GetFunction());
         };
 
         static Handle<Value> Call(const Arguments& args) {
@@ -73,13 +103,6 @@ class PythonObject : public ObjectWrap {
             return scope.Close(result);
         }
 
-        static Handle<Value> ToString(const Arguments& args) {
-            HandleScope scope;
-            Handle<Object> obj = args.This();
-            PythonObject* py_obj = ObjectWrap::Unwrap<PythonObject>(obj);
-            std::string result = py_obj->GetStr();
-            return scope.Close(String::New(result.c_str()));
-        };
 
         PyObject* GetValue() {
             return _object;
@@ -114,9 +137,8 @@ class PythonObject : public ObjectWrap {
                 Exception::TypeError(String::New("Could not import that module."))
             );
         };
-/*
+
         static Handle<Value> MapGet(Local<String> key, const AccessorInfo& info) {
-            HandleScope scope;
             Handle<Object> v8this = info.Holder();
             PythonObject* object = ObjectWrap::Unwrap<PythonObject>(v8this),
                 *new_object;
@@ -129,23 +151,15 @@ class PythonObject : public ObjectWrap {
                 result = python_object_template_->NewInstance();
                 PythonObject* obj_out = new PythonObject(attr);
                 result->SetInternalField(0, External::New(obj_out));
-                return scope.Close(result);
+                return result;
             }
-            return object->Fallback_Get(key_string);
-        };
-
-        static Handle<Value> Fallback_Get(const std::string& key_string) {
-            HandleScope scope;
-            Local<FunctionTemplate> t; 
-            return Undefined();
+            return Handle<Value>();    
         };
 
         static Handle<Value> MapSet(Local<String> key, Local<Value> value, const AccessorInfo& info) {
             // for now.
             return Undefined();
         };
-
-*/ 
 
         static Handle<Value> GetAttribute(const Arguments& args) {
             HandleScope scope;

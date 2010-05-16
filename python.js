@@ -3,8 +3,7 @@ var sys = require('sys'),
     binding = require('./binding');
 
 var sys = binding.import('sys'),
-path = sys.getAttribute("getrecursionlimit");
-puts(sys.toString());
+path = sys.getrecursionlimit;
 puts(path.valueOf().apply(path).toString());
 /*var recursion_limit = sys.getrecursionlimit.valueOf();
 var result = recursion_limit();
