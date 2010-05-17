@@ -1,29 +1,36 @@
 var sys = require('sys'),
     puts = sys.puts,
     binding = require('./binding'),
+    path_additions = require('./path_additions'),
     http = require('http');
 
 var sys = binding.import('sys');
-var posix = binding.import('os');
+var os = binding.import('os');
 
-sys.path.append(posix.getcwd().toString());
-var gary_busey = binding.import("gary_busey");
-var result = gary_busey.say_hey.call("man i suck");
+os.environ.update({
+    'DJANGO_SETTINGS_MODULE':'project.development',
+});
 
 /*
+var gary_busey = binding.import("gary_busey");
+var result = gary_busey.say_hey.call("man i suck");
+*/
 var django_wsgi = binding.import('django.core.handlers.wsgi');
 
 var wsgi_handler = django_wsgi.WSGIHandler.call()
+wsgi_handler.load_middleware();
 
 http.createServer(function (req, res) {
-    var wsgi_request = django_wsgi.WSGIRequest.call({
+    var wsgi_request = django_wsgi.WSGIRequest({
         'path':req.url,
+        'REQUEST_PATH':req.url,
+        'REQUEST_METHOD':'GET',
+        'HTTP_HOST':'localhost:8000',
     });
-    var result = wsgi_handler.get_response.call(wsgi_request);
+    var response = wsgi_handler.get_response(wsgi_request);
 
-    res.writeHead(200, {'Content-Type':'text/plain'});
-    res.write('Heyyyyy\n');
+    res.writeHead(200, {'Content-Type':'text/html'});
+    var content = response.content.toString();
+    res.write(content);
     res.close();
 }).listen(8000); 
-*/
-puts(result.toString());

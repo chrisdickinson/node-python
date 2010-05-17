@@ -20,7 +20,7 @@ using namespace node;
 class PythonObject : public ObjectWrap {
     PyObject* _object;
 
-    static Persistent<ObjectTemplate> python_object_template_;
+    static Persistent<FunctionTemplate> python_function_template_;
     public:
         PythonObject (PyObject* obj) : _object(obj) { }
         virtual ~PythonObject() {
@@ -31,15 +31,19 @@ class PythonObject : public ObjectWrap {
         static void Initialize(Handle<Object> target) {
             HandleScope scope;
 
-            python_object_template_ = Persistent<ObjectTemplate>::New(MakePythonObjectTemplate());
+
+            Local<FunctionTemplate> pytpl = FunctionTemplate::New();
+            MakePythonObjectTemplate(pytpl);
+            python_function_template_ = Persistent<FunctionTemplate>::New(pytpl);
+            
             Handle<FunctionTemplate> t = FunctionTemplate::New(New);
             target->Set(String::NewSymbol("import"), t->GetFunction());
 
         };
 
-        static Handle<ObjectTemplate> MakePythonObjectTemplate() {
+        static Handle<ObjectTemplate> MakePythonObjectTemplate(Local<FunctionTemplate>& t) {
             HandleScope scope;
-            Handle<ObjectTemplate> result = ObjectTemplate::New();
+            Handle<ObjectTemplate> result = t->InstanceTemplate();
             result->SetInternalFieldCount(1);
             result->SetNamedPropertyHandler(MapGet, MapSet);
 
@@ -53,7 +57,6 @@ class PythonObject : public ObjectWrap {
             result->SetCallAsFunctionHandler(Call, Handle<Value>());
             //result->SetAccessor(String::New("getAttribute"), get_attribute->GetFunction());
             //result->SetAccessor(String::New("CALL_NON_FUNCTION"), call->GetFunction());
-            return scope.Close(result);
         };
 
         NODEPY_ACCESSOR(ToString)
@@ -91,14 +94,38 @@ class PythonObject : public ObjectWrap {
         };
 
         PyObject* ConvertArgToPyObject(const Handle<Value>& value) {
+            int len;
             if(value->IsString()) {
                 return PyString_FromString(*String::Utf8Value(value->ToString()));
             } else if(value->IsNumber()) {
                 return PyFloat_FromDouble(value->NumberValue());
             } else if(value->IsObject()) {
+                Local<Object> obj = value->ToObject();
+                if(!obj->FindInstanceInPrototypeChain(python_function_template_).IsEmpty()) {
+                    PythonObject* python_object = ObjectWrap::Unwrap<PythonObject>(value->ToObject());
+                    PyObject* pyobj = python_object->GetValue();
+                    return pyobj;
+                } else {
+                    Local<Array> property_names = obj->GetPropertyNames();
+                    len = property_names->Length();
+                    PyObject* py_dict = PyDict_New();
+                    for(int i = 0; i < len; ++i) {
+                        Local<String> str = property_names->Get(i)->ToString();
+                        Local<Value> js_val = obj->Get(str);
+                        PyDict_SetItemString(py_dict, *String::Utf8Value(str), ConvertArgToPyObject(js_val));
+                    }
+                    return py_dict;
+                }
                 return NULL;
             } else if(value->IsArray()) {
-                return NULL;
+                Local<Array> array = Array::Cast(*value);
+                len = array->Length();
+                PyObject* py_list = PyList_New(len);
+                for(int i = 0; i < len; ++i) {
+                    Local<Value> js_val = array->Get(i);
+                    PyList_SET_ITEM(py_list, i, ConvertArgToPyObject(js_val));
+                }
+                return py_list;
             }
             return NULL;
         }
@@ -107,20 +134,26 @@ class PythonObject : public ObjectWrap {
             HandleScope scope;
             int len = args.Length();
             PyObject* py_args_as_list = PyTuple_New(len);
-            std::vector<PyObject*> py_args_to_decref(len); 
+            std::vector<PyObject*> py_args_to_decref(len);
             for(int i = 0; i < len; ++i) {
                 PyObject* py_arg_n = ConvertArgToPyObject(args[i]);
                 PyTuple_SET_ITEM(py_args_as_list, i, py_arg_n);
                 py_args_to_decref.push_back(py_arg_n);
             }
             PyObject* py_result = PyObject_CallObject(_object, py_args_as_list);
+            if(!py_result) {
+                PyErr_Print();
+                return ThrowException(
+                    Exception::TypeError(String::New("UH OH WILL ROGER"))
+                ); 
+            }
             /*for(std::vector<PyObject*>::iterator i = py_args_to_decref.begin(); i != py_args_to_decref.end(); ++i) {
                 if(*i != NULL) {
                     Py_DECREF(*i);
                 }
             }*/
 
-            Handle<Object> result = python_object_template_->NewInstance();
+            Handle<Object> result = python_function_template_->GetFunction()->NewInstance();
             result->SetInternalField(0, External::New(new PythonObject(py_result)));
             return scope.Close(result);
         }
@@ -148,9 +181,9 @@ class PythonObject : public ObjectWrap {
             String::Utf8Value utf_module_name(args[0]->ToString());
             py_module_name = PyString_FromString(*utf_module_name),
             py_module = PyImport_Import(py_module_name);
-            Py_DECREF(py_module_name);
+            Py_XDECREF(py_module_name);
             if(py_module != NULL) {
-                Handle<Object> result = python_object_template_->NewInstance();
+                Handle<Object> result = python_function_template_->GetFunction()->NewInstance();
                 result->SetInternalField(0, External::New(new PythonObject(py_module)));
                 return scope.Close(result);
             }
@@ -169,7 +202,7 @@ class PythonObject : public ObjectWrap {
             PyObject* attr = object->GetAttr(key_string);
             Handle<Object> result;
             if (attr) {
-                result = python_object_template_->NewInstance();
+                result = python_function_template_->GetFunction()->NewInstance();
                 PythonObject* obj_out = new PythonObject(attr);
                 result->SetInternalField(0, External::New(obj_out));
                 return result;
@@ -193,7 +226,7 @@ class PythonObject : public ObjectWrap {
             PyObject* attr = object->GetAttr(key_string);
             Handle<Object> result;
             if (attr) {
-                result = python_object_template_->NewInstance();
+                result = python_function_template_->GetFunction()->NewInstance();
                 PythonObject* obj_out = new PythonObject(attr);
                 result->SetInternalField(0, External::New(obj_out));
                 return scope.Close(result);
@@ -212,7 +245,7 @@ class PythonObject : public ObjectWrap {
         };
 }; 
 
-Persistent<ObjectTemplate> PythonObject::python_object_template_;
+Persistent<FunctionTemplate> PythonObject::python_function_template_;
 
 static Handle<Value>
 Shutdown (const Arguments& args) {
