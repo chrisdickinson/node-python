@@ -1,21 +1,49 @@
-node/python playground
+node-python binding 
 ======================
 
-this is just a little git repo that i put together to play around with C++, python, and node.
+I bumped this up from "playground" to "binding" on account of it starting to feel like the
+right thing to do. 
 
-for now i'm just playing with the goal of maybe being able to call a Python function from within
-node.js. I'm not sure why that excites me. I'm sure it's along the same reasons as why I like
-Lord of the Rings so much, or why I think Grand Admiral Thrawn was an amazing tactician.
+This is a binding between Node.js and Python; unfortunately as written it actually embeds a
+python process inside of Node. It's of extremely alpha quality and was originally written with
+the intent of getting a better understanding of the internals of both V8 and CPython.
 
-*ImeanIlovegoingoutsideandplayingbasketballUHHHHH*.
+But, yeah, okay. So the cool things:
 
-anyway. this is in no way "good" code. it's going to reflect me catching up with 4 years of 
-inactivity in C++, as well as getting a grasp of the V8 and Python C/C++ bindings. And yeah,
-the last C++ compiler I used was MSVC .NET 2003. So I'm a bit rusty.
+    var sys = require('sys');
+    var python = require('./binding');
+    var pysys = python.import('sys');
+    sys.puts(pysys.toString());
 
-Anyway, in *theory* all you need to do is run:
+Will output python's `sys.path`. And passing in arguments works, too:
 
-    brew install node
+    var python = require('./binding'),
+    os = python.import('os'),
+    cwd = os.getcwd(),
+    basename = os.path.basename(cwd);
+
+    var sys = require('sys');
+
+    sys.puts(basename.toString());
+
+Unfortunately Python objects are not really fully translated into native Javascript objects yet;
+you have to cast them from whatever they are into whatever you want them to be. At the moment, the
+only provided cast is "toString", but that should change in the near future (hopefully).
+
+Passing python objects that you get from calling python functions from javascript can seamlessly
+be passed back into python functions (no casting required). Currently there's what I assume to be
+a passable argument translation implementation for simple Objects (ones that act like dicts), 
+Arrays, Numbers (maybe?), and Strings.
+
+You can slap together a tiny WSGI hosting thing on it, as well, which is provided in `wsgi.js`.
+It's half implemented, but it's midnight on a Sunday and I should probably sleep.
+
+Installation
+------------ 
+
+I've only tested this out on my computer so no huge promises can be made about other platforms.
+Running OSX 10.6.3:
+
     node-waf configure build
-    node test.js
 
+In theory this is all you need in the entire world.
