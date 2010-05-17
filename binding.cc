@@ -71,15 +71,52 @@ class PythonObject : public ObjectWrap {
         NODEPY_ACCESSOR(ValueOf)
         static Handle<Value> ValueOf(const Arguments& args) {
             HandleScope scope;
-            Handle<Object> obj = args.This();
-            PythonObject* py_obj = ObjectWrap::Unwrap<PythonObject>(obj);
-            PyObject* result = py_obj->GetValue();
-            if(PyCallable_Check(result)) {
+            return scope.Close(ValueOf(args.This()));
+        }
+
+        static Handle<Value> ValueOf(const Handle<Object>& obj) {
+            HandleScope scope;
+            PythonObject* jspy = ObjectWrap::Unwrap<PythonObject>(obj);
+            PyObject* py_obj = jspy->GetValue();
+            if(PyCallable_Check(py_obj)) {
                 Handle<FunctionTemplate> call = FunctionTemplate::New(Call);
                 return scope.Close(call->GetFunction());
-            } else if (PyNumber_Check(result)) {
-                long long_result = PyLong_AsLong(result);
+            } else if (PyNumber_Check(py_obj)) {
+                long long_result = PyLong_AsLong(py_obj);
                 return scope.Close(Integer::New(long_result));
+            } else if (PySequence_Check(py_obj)) {
+                int len = PySequence_Length(py_obj);
+                Handle<Array> array = Array::New(len);
+                for(int i = 0; i < len; ++i) {
+                    Handle<Object> jsobj = python_function_template_->GetFunction()->NewInstance();
+                    PyObject* py_obj_out = PySequence_GetItem(py_obj, i);
+                    PythonObject* obj_out = new PythonObject(py_obj_out);
+                    jsobj->SetInternalField(0, External::New(obj_out));
+                    array->Set(i, jsobj);
+                }
+                return scope.Close(array);
+            } else if (PyMapping_Check(py_obj)) {
+                int len = PyMapping_Length(py_obj);
+                Handle<Object> object = Object::New();
+                PyObject* keys = PyMapping_Keys(py_obj);
+                PyObject* values = PyMapping_Values(py_obj);
+                for(int i = 0; i < len; ++i) {
+                    PyObject *key = PySequence_GetItem(keys, i),
+                        *value = PySequence_GetItem(values, i),
+                        *key_as_string = PyObject_Str(key);
+                    char* cstr = PyString_AsString(key_as_string);
+
+                    Handle<Object> jsobj = python_function_template_->GetFunction()->NewInstance();
+                    PythonObject* obj_out = new PythonObject(value);
+                    jsobj->SetInternalField(0, External::New(obj_out));
+                    object->Set(String::New(cstr), jsobj); 
+
+                    Py_XDECREF(key);
+                    Py_XDECREF(key_as_string);
+                }
+                Py_XDECREF(keys);
+                Py_XDECREF(values);
+                return scope.Close(object);
             }
             return Undefined();
         };
@@ -126,6 +163,8 @@ class PythonObject : public ObjectWrap {
                     PyList_SET_ITEM(py_list, i, ConvertArgToPyObject(js_val));
                 }
                 return py_list;
+            } else if(value->IsUndefined()) {
+                return Py_None;
             }
             return NULL;
         }
