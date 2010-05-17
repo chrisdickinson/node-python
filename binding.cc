@@ -4,10 +4,19 @@
 #include <python2.6/Python.h>
 #include <iostream>
 #include <string>
+#include <vector>
 using namespace v8;
 using std::string;
 using namespace node;
 
+
+#define NODEPY_ACCESSOR(fn)         \
+        static Handle<Value> fn##Accessor(Local<String> property, const AccessorInfo& info) { \
+            HandleScope scope;  \
+            Handle<FunctionTemplate> t = FunctionTemplate::New(fn);   \
+            return scope.Close(t->GetFunction());   \
+        };
+    
 class PythonObject : public ObjectWrap {
     PyObject* _object;
 
@@ -40,18 +49,13 @@ class PythonObject : public ObjectWrap {
             Handle<FunctionTemplate> call = FunctionTemplate::New(Call);
             result->SetAccessor(String::NewSymbol("toString"), ToStringAccessor);
             result->SetAccessor(String::NewSymbol("valueOf"), ValueOfAccessor);
-            result->SetAccessor(String::NewSymbol("CALL_NON_FUNCTION"), CallAccessor);
+            result->SetAccessor(String::NewSymbol("call"), CallAccessor);
             //result->SetAccessor(String::New("getAttribute"), get_attribute->GetFunction());
             //result->SetAccessor(String::New("CALL_NON_FUNCTION"), call->GetFunction());
             return scope.Close(result);
         };
 
-        static Handle<Value> ToStringAccessor(Local<String> property, const AccessorInfo& info) {
-            HandleScope scope;
-            Handle<FunctionTemplate> t = FunctionTemplate::New(ToString);
-            return scope.Close(t->GetFunction());
-        };
-
+        NODEPY_ACCESSOR(ToString)
         static Handle<Value> ToString(const Arguments& args) {
             HandleScope scope;
             Handle<Object> obj = args.This();
@@ -59,13 +63,8 @@ class PythonObject : public ObjectWrap {
             std::string result = py_obj->GetStr();
             return scope.Close(String::New(result.c_str()));
         };
-        
-        static Handle<Value> ValueOfAccessor(Local<String> property, const AccessorInfo& info) {
-            HandleScope scope;
-            Handle<FunctionTemplate> t = FunctionTemplate::New(ValueOf);
-            return scope.Close(t->GetFunction());
-        };
 
+        NODEPY_ACCESSOR(ValueOf)
         static Handle<Value> ValueOf(const Arguments& args) {
             HandleScope scope;
             Handle<Object> obj = args.This();
@@ -81,12 +80,7 @@ class PythonObject : public ObjectWrap {
             return Undefined();
         };
 
-        static Handle<Value> CallAccessor(Local<String> property, const AccessorInfo& info) {
-            HandleScope scope;
-            Handle<FunctionTemplate> t = FunctionTemplate::New(Call);
-            return scope.Close(t->GetFunction());
-        };
-
+        NODEPY_ACCESSOR(Call)
         static Handle<Value> Call(const Arguments& args) {
             HandleScope scope;
             Handle<Object> obj = args.This();
@@ -95,14 +89,40 @@ class PythonObject : public ObjectWrap {
             return scope.Close(result);
         };
 
+        PyObject* ConvertArgToPyObject(const Handle<Value>& value) {
+            if(value->IsString()) {
+                return PyString_FromString(*String::Utf8Value(value->ToString()));
+            } else if(value->IsNumber()) {
+                return PyFloat_FromDouble(value->NumberValue());
+            } else if(value->IsObject()) {
+                return NULL;
+            } else if(value->IsArray()) {
+                return NULL;
+            }
+            return NULL;
+        }
+
         Handle<Value> CallPython(const Arguments& args) {
             HandleScope scope;
-            PyObject* py_result = PyObject_CallFunction(_object, NULL);
+            int len = args.Length();
+            PyObject* py_args_as_list = PyTuple_New(len);
+            std::vector<PyObject*> py_args_to_decref(len); 
+            for(int i = 0; i < len; ++i) {
+                PyObject* py_arg_n = ConvertArgToPyObject(args[i]);
+                PyTuple_SET_ITEM(py_args_as_list, i, py_arg_n);
+                py_args_to_decref.push_back(py_arg_n);
+            }
+            PyObject* py_result = PyObject_CallObject(_object, py_args_as_list);
+            /*for(std::vector<PyObject*>::iterator i = py_args_to_decref.begin(); i != py_args_to_decref.end(); ++i) {
+                if(*i != NULL) {
+                    Py_DECREF(*i);
+                }
+            }*/
+
             Handle<Object> result = python_object_template_->NewInstance();
             result->SetInternalField(0, External::New(new PythonObject(py_result)));
             return scope.Close(result);
         }
-
 
         PyObject* GetValue() {
             return _object;
@@ -153,7 +173,7 @@ class PythonObject : public ObjectWrap {
                 result->SetInternalField(0, External::New(obj_out));
                 return result;
             }
-            return Handle<Value>();    
+            return Handle<Value>(); 
         };
 
         static Handle<Value> MapSet(Local<String> key, Local<Value> value, const AccessorInfo& info) {
