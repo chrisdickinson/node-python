@@ -50,6 +50,7 @@ class PythonObject : public ObjectWrap {
             result->SetAccessor(String::NewSymbol("toString"), ToStringAccessor);
             result->SetAccessor(String::NewSymbol("valueOf"), ValueOfAccessor);
             result->SetAccessor(String::NewSymbol("call"), CallAccessor);
+            result->SetCallAsFunctionHandler(Call, Handle<Value>());
             //result->SetAccessor(String::New("getAttribute"), get_attribute->GetFunction());
             //result->SetAccessor(String::New("CALL_NON_FUNCTION"), call->GetFunction());
             return scope.Close(result);
