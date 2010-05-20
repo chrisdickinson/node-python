@@ -3,7 +3,8 @@ var sys = require('sys'),
     binding = require('./binding'),
     path_additions = require('./path_additions'),
     http = require('http'),
-    url = require('url');
+    url = require('url'),
+    stdin = process.openStdin();
 
 var sys = binding.import('sys');
 var os = binding.import('os');
@@ -21,7 +22,7 @@ var django_wsgi = binding.import('django.core.handlers.wsgi');
 var wsgi_handler = django_wsgi.WSGIHandler.call()
 wsgi_handler.load_middleware();
 
-http.createServer(function (req, res) {
+var server = http.createServer(function (req, res) {
     var path_and_query = url.parse(req.url);
     if(!path_and_query.pathname.match(/^\/media/)) {
         var wsgi_request = django_wsgi.WSGIRequest({
@@ -46,14 +47,16 @@ http.createServer(function (req, res) {
             var as_array = headers[i].valueOf();
             headers_out[as_array[0]] = as_array[1].toString();
         };
-        puts(req.method + ' - ' + response.status_code.valueOf() + ' - ' + path_and_query.pathname + " - " + JSON.stringify(headers_out));
         res.writeHead(status_code, headers_out);
         res.write(content);
-        res.close();
+        res.end();
     } else {
-        puts(req.method + ' - 404 - ' + path_and_query.pathname + " - {}");
-        res.writeHead(404, {"Content-Type":"text/html"});
+        res.writeHead(200, {"Content-Type":"text/html"});
         res.write("<h1>sorry, no images.</h1>");
-        res.close();
+        res.end();
     } 
 }).listen(8000); 
+process.addListener('SIGINT', function () {
+    server.close();
+    puts("Shutting down...");
+});
