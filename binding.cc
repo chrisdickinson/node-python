@@ -1,84 +1,124 @@
+// binding.cc
 #include <v8.h>
-#include <node_object_wrap.h>
-#include <node.h>
-#include <python2.6/Python.h>
-#include <iostream>
 #include <string>
-#include <vector>
+#include <iostream>
+#define RETURN_NEW_PYOBJ(scope,pyobject) \
+        Local<Object> jsobject = python_function_template_->GetFunction()->NewInstance(); \
+        PyObjectWrapper* py_object_wrapper = new PyObjectWrapper(pyobject); \
+        py_object_wrapper->Wrap(jsobject);\
+        return scope.Close(jsobject);
+
 using namespace v8;
 using std::string;
+
+#include <python2.6/Python.h>
+#include <node_object_wrap.h>
 using namespace node;
 
-
-#define NODEPY_ACCESSOR(fn)         \
-        static Handle<Value> fn##Accessor(Local<String> property, const AccessorInfo& info) { \
-            HandleScope scope;  \
-            Handle<FunctionTemplate> t = FunctionTemplate::New(fn);   \
-            return scope.Close(t->GetFunction());   \
-        };
-
-class PythonObject : public ObjectWrap {
-    PyObject* _object;
-
-    static Persistent<FunctionTemplate> python_function_template_;
+class PyObjectWrapper : public ObjectWrap {
+    PyObject* mPyObject;
     public:
-        PythonObject (PyObject* obj) : _object(obj) {
-        };
-
-        virtual ~PythonObject() {
-            Py_XDECREF(_object);
-        };
-
-        static void Initialize(Handle<Object> target) {
-            HandleScope scope;
-
-
-            Local<FunctionTemplate> pytpl = FunctionTemplate::New();
-            MakePythonObjectTemplate(pytpl);
-            python_function_template_ = Persistent<FunctionTemplate>::New(pytpl);
-            
-            Handle<FunctionTemplate> t = FunctionTemplate::New(New);
-            target->Set(String::NewSymbol("import"), t->GetFunction());
-
-        };
-
-        static Handle<ObjectTemplate> MakePythonObjectTemplate(Local<FunctionTemplate>& t) {
-            HandleScope scope;
-            Handle<ObjectTemplate> result = t->InstanceTemplate();
-            result->SetInternalFieldCount(1);
-            result->SetNamedPropertyHandler(MapGet, MapSet);
-
-            Handle<FunctionTemplate> to_string = FunctionTemplate::New(ToString);
-            Handle<FunctionTemplate> value_of = FunctionTemplate::New(ValueOf);
-            Handle<FunctionTemplate> get_attribute = FunctionTemplate::New(GetAttribute);
-            Handle<FunctionTemplate> call = FunctionTemplate::New(Call);
-            result->SetAccessor(String::NewSymbol("toString"), ToStringAccessor);
-            result->SetAccessor(String::NewSymbol("valueOf"), ValueOfAccessor);
-            result->SetAccessor(String::NewSymbol("call"), CallAccessor);
-            result->SetCallAsFunctionHandler(Call, Handle<Value>());
-            //result->SetAccessor(String::New("getAttribute"), get_attribute->GetFunction());
-            //result->SetAccessor(String::New("CALL_NON_FUNCTION"), call->GetFunction());
-        };
-
-        NODEPY_ACCESSOR(ToString)
-        static Handle<Value> ToString(const Arguments& args) {
-            HandleScope scope;
-            Handle<Object> obj = args.This();
-            PythonObject* py_obj = ObjectWrap::Unwrap<PythonObject>(obj);
-            std::string result = py_obj->GetStr();
-            return scope.Close(String::New(result.c_str()));
-        };
-
-        NODEPY_ACCESSOR(ValueOf)
-        static Handle<Value> ValueOf(const Arguments& args) {
-            HandleScope scope;
-            return scope.Close(ValueOf(args.This()));
+        static Persistent<FunctionTemplate> python_function_template_;
+        PyObjectWrapper(PyObject* obj) : mPyObject(obj), ObjectWrap() { }
+        virtual ~PyObjectWrapper() {
+            Py_XDECREF(mPyObject);
+            mPyObject = NULL;
         }
 
-        static Handle<Value> ValueOf(const Handle<Object>& obj) {
+        static void
+        Initialize(Handle<Object> target) {
             HandleScope scope;
-            PythonObject* jspy = ObjectWrap::Unwrap<PythonObject>(obj);
-            PyObject* py_obj = jspy->GetValue();
+            Local<FunctionTemplate> fn_tpl = FunctionTemplate::New();
+            Local<ObjectTemplate> obj_tpl = fn_tpl->InstanceTemplate();
+
+            obj_tpl->SetInternalFieldCount(1);
+
+            // this has first priority. see if the properties already exist on the python object
+            obj_tpl->SetNamedPropertyHandler(Get, Set);
+
+            // If we're calling `toString`, delegate to our version of ToString
+            obj_tpl->SetAccessor(String::NewSymbol("toString"), ToStringAccessor); 
+
+            // likewise for valueOf
+            obj_tpl->SetAccessor(String::NewSymbol("valueOf"), ValueOfAccessor); 
+
+            // Python objects can be called as functions.
+            obj_tpl->SetCallAsFunctionHandler(Call, Handle<Value>());
+
+            python_function_template_ = Persistent<FunctionTemplate>::New(fn_tpl);
+            // let's also export "import"
+            Local<FunctionTemplate> import = FunctionTemplate::New(Import);
+            target->Set(String::New("import"), import->GetFunction());
+        };
+
+        static Handle<Value>
+        Get(Local<String> key, const AccessorInfo& info) {
+            // returning an empty Handle<Value> object signals V8 that we didn't
+            // find the property here, and we should check the "NamedAccessor" functions
+            HandleScope scope;
+            PyObjectWrapper* wrapper = ObjectWrap::Unwrap<PyObjectWrapper>(info.Holder());
+            String::Utf8Value utf8_key(key);
+            string value(*utf8_key);
+            PyObject* result = wrapper->InstanceGet(value);
+            if(result) {
+                RETURN_NEW_PYOBJ(scope, result);
+            }
+            return Handle<Value>();
+        }
+
+        static Handle<Value>
+        Set(Local<String> key, Local<Value> value, const AccessorInfo& info) {
+            // we don't know what to do.
+            return Undefined();
+        };
+
+        static Handle<Value>
+        CallAccessor(Local<String> property, const AccessorInfo& info) {
+            HandleScope scope;
+            Local<FunctionTemplate> func = FunctionTemplate::New(Call);
+            return scope.Close(func->GetFunction());
+        };
+
+        static Handle<Value>
+        ToStringAccessor(Local<String> property, const AccessorInfo& info) {
+            HandleScope scope;
+            Local<FunctionTemplate> func = FunctionTemplate::New(ToString);
+            return scope.Close(func->GetFunction());
+        };
+
+        static Handle<Value>
+        ValueOfAccessor(Local<String> property, const AccessorInfo& info) {
+            HandleScope scope;
+            Local<FunctionTemplate> func = FunctionTemplate::New(ValueOf);
+            return scope.Close(func->GetFunction());
+        }
+
+        static Handle<Value>
+        Call(const Arguments& args) {
+            HandleScope scope;
+            Local<Object> this_object = args.This(); 
+            PyObjectWrapper* pyobjwrap = ObjectWrap::Unwrap<PyObjectWrapper>(args.This());
+            Handle<Value> result = pyobjwrap->InstanceCall(args);
+            return scope.Close(result);
+        }
+
+        static Handle<Value>
+        ToString(const Arguments& args) {
+            HandleScope scope;
+            Local<Object> this_object = args.This(); 
+            PyObjectWrapper* pyobjwrap = ObjectWrap::Unwrap<PyObjectWrapper>(args.This());
+            Local<String> result = String::New(pyobjwrap->InstanceToString(args).c_str());
+            return scope.Close(result);
+        }
+        static Handle<Value> ValueOf(const Handle<Object>& obj) {
+        };
+
+        static Handle<Value>
+        ValueOf(const Arguments& args) {
+            HandleScope scope;
+            Local<Object> this_object = args.This(); 
+            PyObjectWrapper* pyobjwrap = ObjectWrap::Unwrap<PyObjectWrapper>(args.This());
+            PyObject* py_obj = pyobjwrap->InstanceGetPyObject();
             if(PyCallable_Check(py_obj)) {
                 Local<FunctionTemplate> call = FunctionTemplate::New(Call);
                 return scope.Close(call->GetFunction());
@@ -91,8 +131,8 @@ class PythonObject : public ObjectWrap {
                 for(int i = 0; i < len; ++i) {
                     Handle<Object> jsobj = python_function_template_->GetFunction()->NewInstance();
                     PyObject* py_obj_out = PySequence_GetItem(py_obj, i);
-                    PythonObject* obj_out = new PythonObject(py_obj_out);
-                    jsobj->SetInternalField(0, External::New(obj_out));
+                    PyObjectWrapper* obj_out = new PyObjectWrapper(py_obj_out);
+                    obj_out->Wrap(jsobj);
                     array->Set(i, jsobj);
                 }
                 return scope.Close(array);
@@ -108,9 +148,8 @@ class PythonObject : public ObjectWrap {
                     char* cstr = PyString_AsString(key_as_string);
 
                     Local<Object> jsobj = python_function_template_->GetFunction()->NewInstance();
-                    PythonObject* obj_out = new PythonObject(value);
-                    jsobj->SetInternalField(0, External::New(obj_out));
-                    object->Set(String::New(cstr), jsobj); 
+                    PyObjectWrapper* obj_out = new PyObjectWrapper(value);
+                    obj_out->Wrap(jsobj);
                     Py_XDECREF(key);
                     Py_XDECREF(key_as_string);
                 }
@@ -119,19 +158,28 @@ class PythonObject : public ObjectWrap {
                 return scope.Close(object);
             }
             return Undefined();
-        };
+        }
 
-        NODEPY_ACCESSOR(Call)
-        static Handle<Value> Call(const Arguments& args) {
-            HandleScope scope;
-            Handle<Object> obj = args.This();
-            PythonObject* py_obj = ObjectWrap::Unwrap<PythonObject>(obj);
-            Local<Value> result = py_obj->CallPython(args);
-            return scope.Close(result);
-        };
+        static Handle<Value>
+        Import(const Arguments& args) {
+            HandleScope scope; 
+            if(args.Length() < 1 || !args[0]->IsString()) {
+                return ThrowException(
+                    Exception::Error(String::New("I don't know how to import that."))
+                );
+            }
+            PyObject* module_name = PyString_FromString(*String::Utf8Value(args[0]->ToString()));
+            PyObject* module = PyImport_Import(module_name);
+            Py_XDECREF(module_name);
 
-        PyObject* ConvertArgToPyObject(const Handle<Value>& value) {
+            PyObjectWrapper* pyobject_wrapper = new PyObjectWrapper(module);
+            RETURN_NEW_PYOBJ(scope, module);
+        }
+
+        static PyObject*
+        ConvertToPython(const Handle<Value>& value) {
             int len;
+            HandleScope scope;
             if(value->IsString()) {
                 return PyString_FromString(*String::Utf8Value(value->ToString()));
             } else if(value->IsNumber()) {
@@ -139,8 +187,8 @@ class PythonObject : public ObjectWrap {
             } else if(value->IsObject()) {
                 Local<Object> obj = value->ToObject();
                 if(!obj->FindInstanceInPrototypeChain(python_function_template_).IsEmpty()) {
-                    PythonObject* python_object = ObjectWrap::Unwrap<PythonObject>(value->ToObject());
-                    PyObject* pyobj = python_object->GetValue();
+                    PyObjectWrapper* python_object = ObjectWrap::Unwrap<PyObjectWrapper>(value->ToObject());
+                    PyObject* pyobj = python_object->InstanceGetPyObject();
                     return pyobj;
                 } else {
                     Local<Array> property_names = obj->GetPropertyNames();
@@ -149,7 +197,7 @@ class PythonObject : public ObjectWrap {
                     for(int i = 0; i < len; ++i) {
                         Local<String> str = property_names->Get(i)->ToString();
                         Local<Value> js_val = obj->Get(str);
-                        PyDict_SetItemString(py_dict, *String::Utf8Value(str), ConvertArgToPyObject(js_val));
+                        PyDict_SetItemString(py_dict, *String::Utf8Value(str), ConvertToPython(js_val));
                     }
                     return py_dict;
                 }
@@ -160,7 +208,7 @@ class PythonObject : public ObjectWrap {
                 PyObject* py_list = PyList_New(len);
                 for(int i = 0; i < len; ++i) {
                     Local<Value> js_val = array->Get(i);
-                    PyList_SET_ITEM(py_list, i, ConvertArgToPyObject(js_val));
+                    PyList_SET_ITEM(py_list, i, ConvertToPython(js_val));
                 }
                 return py_list;
             } else if(value->IsUndefined()) {
@@ -170,135 +218,58 @@ class PythonObject : public ObjectWrap {
             return NULL;
         }
 
-        Local<Value> CallPython(const Arguments& args) {
-            HandleScope scope;
-            int len = args.Length();
-            PyObject* py_args_as_list = PyTuple_New(len);
-            std::vector<PyObject*> py_args_to_decref(len);
-            for(int i = 0; i < len; ++i) {
-                PyObject* py_arg_n = ConvertArgToPyObject(args[i]);
-                PyTuple_SET_ITEM(py_args_as_list, i, py_arg_n);
-                py_args_to_decref.push_back(py_arg_n);
-            }
-            PyObject* py_result = PyObject_CallObject(_object, py_args_as_list);
-            if(!py_result) {
-                PyErr_Print();
-                return scope.Close(ThrowException(
-                    Exception::TypeError(String::New("UH OH WILL ROGER"))
-                )); 
-            }
-            for(std::vector<PyObject*>::iterator i = py_args_to_decref.begin(); i != py_args_to_decref.end(); ++i) {
-                //Py_XDECREF(*i);
-            }
-
-            Local<Object> result = python_function_template_->GetFunction()->NewInstance();
-            result->SetInternalField(0, External::New(new PythonObject(py_result)));
-            return scope.Close(result);
+        PyObject*
+        InstanceGetPyObject() {
+            return mPyObject;
         }
 
-        PyObject* GetValue() {
-            return _object;
-        };
-
-        std::string GetStr() {
-            PyObject* as_string = PyObject_Str(_object);
-            char* cstr = PyString_AsString(as_string);
-            Py_XDECREF(_object);
-            return std::string(cstr);
-        };
-
-        static Handle<Value> New(const Arguments& args) {
+        Handle<Value> InstanceCall(const Arguments& args) {
+            // for now, we don't do anything.
             HandleScope scope;
-            PythonObject *py_object; 
-            PyObject *py_module, *py_module_name;
-            if (args.Length() == 0 || !args[0]->IsString()) {
+            int len = args.Length();
+            PyObject* args_tuple = PyTuple_New(len);
+            for(int i = 0; i < len; ++i) {
+                PyObject* py_arg = ConvertToPython(args[i]);
+                PyTuple_SET_ITEM(args_tuple, i, py_arg);
+            }
+            PyObject* result = PyObject_CallObject(mPyObject, args_tuple);
+            Py_XDECREF(args_tuple);
+            if(!result) {
+                PyErr_Clear();
                 return ThrowException(
-                    Exception::TypeError(String::New("First argument must be a string"))
+                    Exception::Error(
+                        String::New("Python exception")
+                    )
                 );
-            }
-            String::Utf8Value utf_module_name(args[0]->ToString());
-            py_module_name = PyString_FromString(*utf_module_name),
-            py_module = PyImport_Import(py_module_name);
-            Py_XDECREF(py_module_name);
-            if(py_module != NULL) {
-                Local<Object> result = python_function_template_->GetFunction()->NewInstance();
-                result->SetInternalField(0, External::New(new PythonObject(py_module)));
-                return scope.Close(result);
-            }
-            return ThrowException(
-                Exception::TypeError(String::New("Could not import that module."))
-            );
-        };
-
-        static Handle<Value> MapGet(Local<String> key, const AccessorInfo& info) {
-            HandleScope scope;
-            Handle<Object> v8this = info.Holder();
-            PythonObject* object = ObjectWrap::Unwrap<PythonObject>(v8this),
-                *new_object;
-
-            String::Utf8Value utf_attr_name(key);
-            std::string key_string(*utf_attr_name);
-            PyObject* attr = object->GetAttr(key_string);
-            Local<Object> result;
-            if (attr) {
-                result = python_function_template_->GetFunction()->NewInstance();
-                PythonObject* obj_out = new PythonObject(attr);
-                result->SetInternalField(0, External::New(obj_out));
-                return scope.Close(result);
-            }
-            return Handle<Value>(); 
-        };
-
-        static Handle<Value> MapSet(Local<String> key, Local<Value> value, const AccessorInfo& info) {
-            // for now.
-            return Undefined();
-        };
-
-        static Handle<Value> GetAttribute(const Arguments& args) {
-            HandleScope scope;
-            Handle<Object> v8this = args.This();
-            PythonObject* object = ObjectWrap::Unwrap<PythonObject>(v8this),
-                *new_object;
-
-            String::Utf8Value utf_attr_name(args[0]->ToString());
-            std::string key_string(*utf_attr_name);
-            PyObject* attr = object->GetAttr(key_string);
-            Handle<Object> result;
-            if (attr) {
-                result = python_function_template_->GetFunction()->NewInstance();
-                PythonObject* obj_out = new PythonObject(attr);
-                result->SetInternalField(0, External::New(obj_out));
-                return scope.Close(result);
+            } else {
+                RETURN_NEW_PYOBJ(scope, result);
             }
             return Undefined();
-        };
+        }
 
-        PyObject* GetAttr(const std::string& attr) {
-            if(PyObject_HasAttrString(_object, attr.c_str())) {
-                PyObject* python_attribute = PyObject_GetAttrString(_object, attr.c_str());
-                if(python_attribute != NULL) {
-                    return python_attribute;
-                }
+        string InstanceToString(const Arguments& args) {
+            PyObject* as_string = PyObject_Str(mPyObject);
+            string native_string(PyString_AsString(as_string));
+            Py_XDECREF(as_string);
+            return native_string;
+        }
+
+        PyObject* InstanceGet(const string& key) {
+            if(PyObject_HasAttrString(mPyObject, key.c_str())) {
+                PyObject* attribute = PyObject_GetAttrString(mPyObject, key.c_str());
+                return attribute;
             }
             return (PyObject*)NULL;
-        };
-}; 
+        }
+};
 
-Persistent<FunctionTemplate> PythonObject::python_function_template_;
-
-static Handle<Value>
-Shutdown (const Arguments& args) {
-    Py_Finalize();
-    return Undefined();
-}
-
+Persistent<FunctionTemplate> PyObjectWrapper::python_function_template_;
+// all v8 plugins must emit
+// a "init" function
 extern "C" void
 init (Handle<Object> target) {
     HandleScope scope;
     Py_Initialize();
-    // create a new function template and assign it to the exported variable "fibonacci"
-
-    PythonObject::Initialize(target);
-    Local<FunctionTemplate> shutdown = FunctionTemplate::New(Shutdown);
-    target->Set(String::New("shutdown"), shutdown->GetFunction());
+    PyObjectWrapper::Initialize(target);
 }
+

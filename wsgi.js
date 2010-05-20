@@ -15,11 +15,11 @@ os.environ.update({
 
 /*
 var gary_busey = binding.import("gary_busey");
-var result = gary_busey.say_hey.call("man i suck");
+var result = gary_busey.say_hey("man i suck");
 */
 var django_wsgi = binding.import('django.core.handlers.wsgi');
 
-var wsgi_handler = django_wsgi.WSGIHandler.call()
+var wsgi_handler = django_wsgi.WSGIHandler()
 wsgi_handler.load_middleware();
 
 var server = http.createServer(function (req, res) {
